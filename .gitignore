@@ -1,0 +1,6 @@
+build/
+*.dll
+*.ilk
+*.pdb
+*.pbo
+/.vs
