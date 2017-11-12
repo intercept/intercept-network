@@ -27,9 +27,9 @@ bool rpc_broker::match_target(const std::shared_ptr<client>& cli, const std::str
 }
 
 void rpc_broker::dispatch(std::shared_ptr<zmsg> msg) {
-    if (msg) { //  Queue message if any
-        m_requests.push_back(msg);
-    }
+    //if (msg) { //  Queue message if any
+    //    m_requests.push_back(msg);
+    //}
 
     /*
      * <identity>
@@ -40,17 +40,19 @@ void rpc_broker::dispatch(std::shared_ptr<zmsg> msg) {
 
     auto sender = msg->pop_front(); //Don't care about who it came from
     std::string target = msg->pop_front();
+    std::cout << "rpc from " << sender << " to " << target << "\n";
+    msg->push_front(sender); //need to know where it came from
     GRouter->check_timeouts();
-    while (!m_clients.empty() && !m_requests.empty()) {
+    //while (!m_clients.empty() && !m_requests.empty()) {
         // Choose the most recently seen idle worker; others might be about to expire
         for (auto& cli : m_clients) {
             if (match_target(cli, target)) {
-                std::shared_ptr<zmsg> msg = m_requests.front();
-                m_requests.pop_front();
+                //std::shared_ptr<zmsg> msg = m_requests.front();
+                //m_requests.pop_front();
                 GRouter->worker_send(cli, MDPW_REQUEST, "", msg);
             }
         }
-    }
+    //}
 }
 
 router::router() {

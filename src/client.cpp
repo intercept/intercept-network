@@ -7,13 +7,13 @@ client::client(std::string broker, std::string clientID, int verbose) {
     m_clientID = clientID;
     m_context = std::make_shared<zmq::context_t>(1);
     m_worker = nullptr;
-    m_expect_reply = false;
     m_verbose = verbose;
     m_heartbeat = 2500ms; //  msecs
     m_reconnect = 2500ms; //  msecs
 
     s_catch_signals();
     connect_to_broker();
+    workThread = std::thread([this]() { work(); });
 }
 
 void client::connect_to_broker() {
@@ -35,4 +35,9 @@ void client::connect_to_broker() {
     //  If liveness hits zero, queue is considered disconnected
     m_liveness = HEARTBEAT_LIVENESS;
     m_heartbeat_at = std::chrono::system_clock::now() + m_heartbeat;
+}
+
+client::~client() {
+    shouldStop = true;
+    workThread.join();
 }

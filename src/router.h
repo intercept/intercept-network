@@ -250,7 +250,10 @@ namespace intercept::network::server {
                 std::string service_name = msg->pop_front();
                 sender->m_service = get_service(service_name);
                 sender->initialized = true;
-            } else  if (command.compare(MDPW_REQUEST) == 0) {
+                if (sender->m_service)
+                    sender->m_service->m_clients.emplace(sender);
+
+            } else if (command.compare(MDPW_REQUEST) == 0) {
                 if (!sender->initialized) {//Not initialized. Protocol violation
                     __itt_task_end(domain);
                     disconnect_client(sender, true);
