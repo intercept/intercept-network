@@ -13,6 +13,11 @@ client::client(std::string broker, std::string clientID, int verbose) {
 
     s_catch_signals();
     connect_to_broker();
+
+    m_signalStopAddr = "inproc://%lx%x" +std::to_string( (unsigned long) this) + std::to_string(rand());
+    m_signalStopSock = std::make_unique<zmq::socket_t>(*m_context, ZMQ_PAIR);
+    m_signalStopSock->bind(m_signalStopAddr);
+
     workThread = std::thread([this]() { work(); });
 }
 

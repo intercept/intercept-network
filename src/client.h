@@ -5,6 +5,7 @@
 #include <thread>
 #include <chrono>
 #include <map>
+#include <mutex>
 using namespace std::chrono_literals;
 #define HEARTBEAT_LIVENESS  3       //  3-5 is reasonable
 namespace intercept::network::client {
@@ -92,7 +93,11 @@ namespace intercept::network::client {
                 msg = std::make_shared<zmsg>(*request);
             else
                 msg = request;
-            msg->send(*m_worker);
+
+            sendQueMtx.lock();
+            sendqueue.emplace_back(std::move(msg));
+            sendQueMtx.unlock();
+            sendMsgInterrupt();
         }
 
         //  ---------------------------------------------------------------------
@@ -127,13 +132,32 @@ namespace intercept::network::client {
             request,
             reply
         };
+         void sendMsgInterrupt() {
+             char dummy;
+             zmq::socket_t doSignal(*m_context, ZMQ_PAIR);
+             doSignal.connect(m_signalStopAddr);
+             doSignal.send(&dummy, sizeof(dummy));
+         }
 
         std::pair<messageType, std::shared_ptr<zmsg>> recv() {
 
             while (!s_interrupted && !shouldStop) {
                 zmq::pollitem_t items[] = {
-                    { *m_worker,  0, ZMQ_POLLIN, 0 } };
-                zmq::poll(items, 1, m_heartbeat);
+                    { *m_worker,  0, ZMQ_POLLIN, 0 },
+                    { *m_signalStopSock, 0, ZMQ_POLLIN, 0 }
+                };
+                zmq::poll(items, 2, m_heartbeat);
+
+                if (items[1].revents & ZMQ_POLLIN) {
+                    sendQueMtx.lock();
+                    char x;
+                    m_signalStopSock->recv(&x, 1);
+                    zmsg m(*m_signalStopSock);
+                    for (auto& it : sendqueue)
+                        it->send(*m_worker);
+                    sendqueue.clear();
+                    sendQueMtx.unlock();
+                }
 
                 if (items[0].revents & ZMQ_POLLIN) {
                     std::shared_ptr<zmsg> msg = std::make_shared<zmsg>(*m_worker);
@@ -172,7 +196,7 @@ namespace intercept::network::client {
                             (int) *(command.c_str()));
                         msg->dump();
                     }
-                } else
+                } else if (!(items[1].revents & ZMQ_POLLIN))
                     if (--m_liveness == 0) {
                         if (m_verbose) {
                             s_console("W: disconnected from broker - retrying...");
@@ -309,6 +333,11 @@ namespace intercept::network::client {
         std::string m_clientID;
         std::shared_ptr<zmq::context_t> m_context;
         std::shared_ptr<zmq::socket_t> m_worker;     //  Socket to broker
+
+        std::mutex sendQueMtx;
+        std::vector<std::shared_ptr<zmsg>> sendqueue;
+
+
         std::thread workThread;
         int m_verbose;                //  Print activity to stdout
         uint64_t lastRequestID = 1;
@@ -319,7 +348,8 @@ namespace intercept::network::client {
         size_t m_liveness;            //  How many attempts left
         std::chrono::milliseconds m_heartbeat;              //  Heartbeat delay, msecs
         std::chrono::milliseconds m_reconnect;              //  Reconnect delay, msecs
-
+        std::unique_ptr<zmq::socket_t> m_signalStopSock;
+        std::string m_signalStopAddr;
                                        //  Return address, if any
         std::string m_reply_to;
     };
