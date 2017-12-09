@@ -6,6 +6,9 @@
 #include <chrono>
 #include <map>
 #include <mutex>
+#include <complex.h>
+#include <json.hpp>
+
 using namespace std::chrono_literals;
 #define HEARTBEAT_LIVENESS  3       //  3-5 is reasonable
 namespace intercept::network::client {
@@ -15,7 +18,7 @@ namespace intercept::network::client {
         //  ---------------------------------------------------------------------
         //  Constructor
 
-        client(std::string broker, std::string service, int verbose = 0);
+        client(std::string broker, uint32_t service, int verbose = 0);
 
         //  ---------------------------------------------------------------------
         //  Destructor
@@ -27,78 +30,82 @@ namespace intercept::network::client {
         //  Send message to broker
         //  If no _msg is provided, creates one internally
         ///Only internal use
-        void send_to_broker(char *command, std::vector<std::string> options, std::shared_ptr<zmsg> _msg) {
-            std::shared_ptr<zmsg> msg = _msg ? std::make_shared<zmsg>(*_msg) : std::make_shared<zmsg>();
+        void sendReady(std::vector<std::string> options) const {
+            zmsg msg;
 
-            //  Stack protocol envelope to start of message       
+            RF_serverMessage rf(static_cast<uint32_t>(serverMessageType::ready));
+            rf.snIdent = serverIdent;
+            rf.senderID = m_clientID;
+            msg.setRoutingFrame(rf);
+
+            //  Stack protocol envelope to start of message
             for (auto& option : options)
                 if (option.length() != 0) {
-                    msg->push_front(option);
+                    msg.push_front(option);
                 }
-            msg->push_front(command);
-            msg->push_front(MDPW_WORKER);
-            msg->push_front("");
 
-            /*
-             * empty
-             * <header>
-             * command
-             * options....
-             */
-            if (m_verbose) {
-                s_console("I: sending %s to broker",
-                    mdps_commands[(int) *command]);
-                msg->dump();
-            }
-            msg->send(*m_worker);
-        }
-
-        void sendHeartbeat() {
-            std::shared_ptr<zmsg> msg = std::make_shared<zmsg>();
-            msg->push_front(MDPW_HEARTBEAT);
-            msg->push_front("");
-
-            /*
-            * empty
-            * <header> (MDPW_HEARTBEAT)
-            */
             //if (m_verbose) {
-            //    s_console("ping");
-            //    msg->dump();
+            //    msg.dump();
             //}
-            msg->send(*m_worker);
+            msg.send(*m_worker);
         }
 
-        void send(std::string service, std::shared_ptr<zmsg> request, bool copyRequest = true) {
+        void sendHeartbeat() const {
+            zmsg heartbeat;
+            RF_serverMessage rf(static_cast<uint32_t>(serverMessageType::heartbeat));
+            rf.senderID = m_clientID;
+            rf.snIdent = serverIdent;
+            heartbeat.setRoutingFrame(rf);
 
-            //  Prefix request with protocol frames
-            //  Frame 1: "MDPCxy" (six bytes, MDP/Client x.y)
-            //  Frame 2: Service name (printable string)
-            request->push_front(service.c_str());
-            request->push_front(MDPW_REQUEST);
-            request->push_front(MDPW_WORKER);
-            request->push_front("");
-            /*
-             * empty
-             * <header>
-             * <MDPW_REQUEST>
-             * <service name>
-             */
-            if (m_verbose) {
-                s_console("I: send request to '%s' service:", service.c_str());
-                request->dump();
-            }
+            heartbeat.send(*m_worker);
+        }
+
+        void send(serviceType service, std::shared_ptr<zmsg> request, bool copyRequest = true) {
+
+            //if (m_verbose) {
+            //    s_console("I: send request to '%s' service:", service.c_str());
+            //    request->dump();
+            //}
             std::shared_ptr<zmsg> msg;
             if (copyRequest)
                 msg = std::make_shared<zmsg>(*request);
             else
                 msg = request;
 
+            RF_serviceMsg rf(service);
+            rf.senderID = m_clientID;
+            rf.snIdent = serverIdent;
+            msg->setRoutingFrame(rf);
+
             sendQueMtx.lock();
             sendqueue.emplace_back(std::move(msg));
             sendQueMtx.unlock();
             sendMsgInterrupt();
         }
+        void send(std::string service, std::shared_ptr<zmsg> request, bool copyRequest = true) {
+
+            //if (m_verbose) {
+            //    s_console("I: send request to '%s' service:", service.c_str());
+            //    request->dump();
+            //}
+            std::shared_ptr<zmsg> msg;
+            if (copyRequest)
+                msg = std::make_shared<zmsg>(*request);
+            else
+                msg = request;
+
+            RF_serviceMsg rf(serviceType::generic);
+            msg->push_front(service);
+            rf.senderID = m_clientID;
+            rf.snIdent = serverIdent;
+            msg->setRoutingFrame(rf);
+
+            sendQueMtx.lock();
+            sendqueue.emplace_back(std::move(msg));
+            sendQueMtx.unlock();
+            sendMsgInterrupt();
+        }
+
 
         //  ---------------------------------------------------------------------
         //  Connect or reconnect to broker
@@ -130,7 +137,8 @@ namespace intercept::network::client {
         enum class messageType {
             none,
             request,
-            reply
+            reply,
+            service
         };
          void sendMsgInterrupt() {
              char dummy;
@@ -168,35 +176,51 @@ namespace intercept::network::client {
                     m_liveness = HEARTBEAT_LIVENESS;
 
                     //  Don't try to handle errors, just assert noisily
-                    assert(msg->parts() >= 2);
-                    auto empty = msg->pop_front();
-                    assert(empty.compare("") == 0);
-                    //assert (strcmp (empty, "") == 0);
-                    //free (empty);
+                    auto rfV = msg->getRoutingFrame();
 
-                    //auto header = msg->pop_front();
-                    //assert(header.compare((unsigned char *)MDPW_WORKER) == 0);
-                    //free (header);
+                    assert(msg->parts() >= 1 || rfV.index() != 0);
 
-                    std::string command = msg->pop_front();
-                    if (command.compare(MDPW_REQUEST) == 0) {
-                        //  We should pop and save as many addresses as there are
-                        //  up to a null part, but for now, just save one...
-                        m_reply_to = msg->unwrap();
-                        return { messageType::request, msg };     //  We have a request to process
-                    } else if (command.compare(MDPW_REPLY) == 0) {
-                        return { messageType::reply, msg };
-                    } else if (command.compare(MDPW_HEARTBEAT) == 0) {
-                        std::cerr << "pong\n";
-                        //  Do nothing for heartbeats
-                    } else if (command.compare(MDPW_DISCONNECT) == 0) {
-                        connect_to_broker();//I don't know why he disconnected us.. But I want to stay connected!
-                    } else {
-                        s_console("E: invalid input message (%d)",
-                            (int) *(command.c_str()));
-                        msg->dump();
+                    switch (static_cast<routingFrameType>(rfV.index())) {
+                        case routingFrameType::serverMessage: {
+                            RF_serverMessage& rf = std::get<RF_serverMessage>(rfV);
+                            switch (static_cast<serverMessageType>(rf.type)) {
+                                case serverMessageType::heartbeat: {
+                                    std::cerr << "pong\n";
+                                    //  Do nothing for heartbeats
+                                }break;
+                                case serverMessageType::disconnect: {
+                                    std::cerr << "disconnected by router\n";
+                                    connect_to_broker();//I don't know why he disconnected us.. But I want to stay connected!
+                                }break;
+                                default:;
+                            }
+                        }break;
+                        case routingFrameType::directMessage: {
+                            RF_directMessage& rf = std::get<RF_directMessage>(rfV);
+                            if (static_cast<clientFlags>(rf.clientFlags) == clientFlags::request) {
+                                return { messageType::request, msg };     //  We have a request to process
+                            } else if (static_cast<clientFlags>(rf.clientFlags) == clientFlags::reply) {
+                                return { messageType::reply, msg };
+                            }
+                        }break;
+                        case routingFrameType::serviceMessage: {
+                            return { messageType::service, msg };     //  We have a request to process
+                        }break;
+                        default: __debugbreak();
                     }
-                } else if (!(items[1].revents & ZMQ_POLLIN))
+
+                    //s_console("E: invalid input message (%d)",
+                    //    (int) *(command.c_str()));
+                    //msg->dump();
+
+                }
+                //  Send HEARTBEAT if it's time
+                if (std::chrono::system_clock::now() >= m_heartbeat_at) {
+                    std::cerr << "ping\n";
+                    sendHeartbeat();
+                    m_heartbeat_at += m_heartbeat;
+
+                    //Are we timing out?
                     if (--m_liveness == 0) {
                         if (m_verbose) {
                             s_console("W: disconnected from broker - retrying...");
@@ -204,11 +228,7 @@ namespace intercept::network::client {
                         std::this_thread::sleep_for(m_reconnect);
                         connect_to_broker();
                     }
-                //  Send HEARTBEAT if it's time
-                if (std::chrono::system_clock::now() >= m_heartbeat_at) {
-                    std::cerr << "ping\n";
-                    sendHeartbeat();
-                    m_heartbeat_at += m_heartbeat;
+
                 }
             }
             if (s_interrupted || shouldStop)
@@ -232,12 +252,13 @@ namespace intercept::network::client {
                     case messageType::request: {
 
                         auto type = packet.second->pop_front();
-                        if (type == "q") {
 
+                        nlohmann::json targetInfo = nlohmann::json::parse(type);
 
+                        if (targetInfo[2] == 1) {//is request
 
-                            auto requestID = packet.second->pop_front();
-                            if (requestID == "0") {
+                            bool wantAnswer = targetInfo[1];
+                            if (!wantAnswer) {//don't want answer
                                 //printf("message\n");
                                 //packet.second->push_front(requestID);
                                 packet.second->push_front(m_reply_to);
@@ -253,10 +274,29 @@ namespace intercept::network::client {
                                 synchronousRequestHandler(packet.second);
 
                                 auto request = packet.second;
-                                request->push_front(requestID); //Don't want answer
-                                request->push_front("p"); //is reply
-                                request->push_front(m_reply_to);
-                                send("rpc", request);
+
+                                nlohmann::json info;
+                                info[1] = false; //Don't want answer
+                                info[2] = 2; //is reply
+                                nlohmann::json target;
+
+                                RF_base routingBase(routingFrameType::none);
+                                std::visit([&routingBase](auto&& arg) {
+                                    using T = std::decay_t<decltype(arg)>;
+                                    if constexpr (std::is_same_v<T, std::nullptr_t>) {
+                                        __debugbreak();
+                                        return;
+                                    } else
+                                        routingBase = arg;
+                                }, packet.second->getRoutingFrame());
+
+                                target["clientID"] = routingBase.senderID;
+
+                                info[0] = target;
+                                info[3] = targetInfo[3];
+                                request->push_front(info.dump(-1));
+
+                                send(serviceType::rpc, request);
                             }
 
 
@@ -264,10 +304,7 @@ namespace intercept::network::client {
                         } else {
                             //printf("reply\n");
 
-
-                            auto requestID = packet.second->pop_front();
-
-                            auto reqID = std::stoull(requestID);
+                            uint64_t reqID = targetInfo[3];
 
                             auto found = waitingRequests.find(reqID);
 
@@ -290,9 +327,11 @@ namespace intercept::network::client {
 
 
                                                break;
-                    case messageType::reply:
-
-                        break;
+                    case messageType::service: {
+                        RF_serviceMsg& rf = std::get<RF_serviceMsg>(packet.second->getRoutingFrame());
+                        if (serviceHandlers.find(rf.messageType) != serviceHandlers.end())
+                            serviceHandlers[rf.messageType](packet.second);
+                    }break;
                     default:;
                 }
 
@@ -306,31 +345,46 @@ namespace intercept::network::client {
         }
         //Sends a message to someone. Not expecting any answer
         //#TODO also variant that takes zmsg rvalue and consumes it
-        void sendMessage(std::shared_ptr<zmsg> data, std::string target) {//#TODO unique_ptr. And take ownership
+        void sendMessage(std::shared_ptr<zmsg> data, int32_t target) {//#TODO unique_ptr. And take ownership
             auto request = data;
-            request->push_front("0"); //Don't want answer
-            request->push_front("q"); //is request
-            request->push_front(target);
-            send("rpc", request);
+            nlohmann::json info;
+            info[1] = false; //Don't want answer
+            info[2] = 1; //is request
+            nlohmann::json targetInfo;
+            targetInfo["clientID"] = target;
+            info[0] = targetInfo;
+            request->push_front(info.dump(-1));
+            send(serviceType::rpc, request);
         }
 
         //Sends a request to someone. Expecting an answer.
-        void sendRequest(std::shared_ptr<zmsg> data, std::string target, std::function<void(std::shared_ptr<zmsg> answer)> onAnswer) {
+        void sendRequest(std::shared_ptr<zmsg> data, int32_t target, std::function<void(std::shared_ptr<zmsg> answer)> onAnswer) {
             auto request = data;
-            request->push_front(std::to_string(lastRequestID)); //Want answer. And that's the ID
+
+            nlohmann::json info;
+            info[1] = true; //Want answer
+            info[2] = 1; //is request
+            info[3] = lastRequestID;
+            nlohmann::json targetInfo;
+            targetInfo["clientID"] = target;
+            info[0] = targetInfo;
+            request->push_front(info.dump(-1));
+
             waitingRequests[lastRequestID] = onAnswer;
             lastRequestID++;
-            request->push_front("q"); //is request
-            request->push_front(target);
-            send("rpc", request);
+
+
+            send(serviceType::rpc, request);
         }
 
         std::function<void(std::shared_ptr<zmsg>)> synchronousRequestHandler;
         std::function<void(std::shared_ptr<zmsg>)> asynchronousRequestHandler;
+        std::map<serviceType, std::function<void(std::shared_ptr<zmsg>)>> serviceHandlers;
 
     private:
         std::string m_broker;
-        std::string m_clientID;
+        int32_t m_clientID;
+        uint64_t serverIdent;
         std::shared_ptr<zmq::context_t> m_context;
         std::shared_ptr<zmq::socket_t> m_worker;     //  Socket to broker
 

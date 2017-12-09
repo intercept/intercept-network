@@ -1,6 +1,6 @@
 #include "client.h"
 using namespace intercept::network::client;
-client::client(std::string broker, std::string clientID, int verbose) {
+client::client(std::string broker, uint32_t clientID, int verbose) {
     s_version_assert(4, 0);
 
     m_broker = broker;
@@ -27,7 +27,12 @@ void client::connect_to_broker() {
     //No Lingering
     int linger = 0;
     m_worker->setsockopt(ZMQ_LINGER, &linger, sizeof(linger));
-    m_worker->setsockopt(ZMQ_IDENTITY, m_clientID.c_str(), m_clientID.length()); //#TODO clientID
+    clientIdentity id{
+        m_clientID,
+        serverIdent
+    };
+
+    m_worker->setsockopt(ZMQ_IDENTITY, &id, sizeof(clientIdentity));
     //s_set_id(*m_worker, 123);
     m_worker->connect(m_broker.c_str());
     if (m_verbose)
@@ -35,7 +40,7 @@ void client::connect_to_broker() {
 
     //  Register rpc service
 
-    send_to_broker((char*)MDPW_READY, {"rpc"}, NULL);
+    sendReady({"rpc"});
 
     //  If liveness hits zero, queue is considered disconnected
     m_liveness = HEARTBEAT_LIVENESS;

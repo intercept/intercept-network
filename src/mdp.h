@@ -18,9 +18,32 @@
 #define MDPW_HEARTBEAT      "\004"
 #define MDPW_DISCONNECT     "\005"
 
+enum class clientFlags {
+    none,
+    request,
+    reply
+};
+
+enum class serverMessageType {
+    ready,
+    heartbeat, //Heartbeats have no server Identification
+    disconnect
+};
+
+
 static char *mdps_commands [] = {
     NULL, (char*)"READY", (char*)"REQUEST", (char*)"REPLY", (char*)"HEARTBEAT", (char*)"DISCONNECT"
 };
+
+
+class execAtReturn {
+public:
+    explicit execAtReturn(std::function<void()> func) :function(func) {}
+    ~execAtReturn() { function(); }
+private:
+    std::function<void()> function;
+};
+
 
 #endif
 

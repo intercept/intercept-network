@@ -8,6 +8,7 @@
 #include <intercept.hpp>
 #include "client.h"
 #include <any>
+#include <fstream>
 
 using namespace intercept::types;
 using json = nlohmann::json;
@@ -698,9 +699,51 @@ int intercept::api_version() {
     return 1;
 }
 
-void  intercept::on_frame() {}
+std::vector<std::shared_ptr<zmsg>> pvarQueue;
+std::mutex pvarMutex;
+
 intercept::network::client::client* pClient = nullptr;
 intercept::network::server::router* pRouter = nullptr;
+std::unique_ptr<std::ofstream> logF;
+
+void  intercept::on_frame() {  
+    if (!pClient || !logF) return;
+    if (pvarQueue.empty()) return;
+    pvarMutex.lock();
+    for (auto& it : pvarQueue) {
+        std::string dataStr = it->pop_front();
+        json data = json::parse(dataStr);
+
+        uint32_t cmd = data["cmd"];
+        if (cmd == 0) {//setVar
+            
+            std::string name = data["name"];
+            json valueBase = data["value"];
+
+            *logF << "set " << dataStr.length() << " " << name <<"\n";
+
+            json base;
+
+            param_archive ar(rv_allocator<ClassEntryJson>::create_single(EntryType::clas, ""sv, &base));
+
+            game_value out;
+            ar._isExporting = false;
+            ar._p3 = 1;
+            (&out)->serialize(ar);
+            ar._p3 = 2;
+            (&out)->serialize(ar);
+
+            //#TODO support for other namespaces
+
+            sqf::set_variable(sqf::mission_namespace(), name, out);
+        }
+
+
+
+    }
+    pvarMutex.unlock();
+}
+
 
 void intercept::pre_start() {
     //if (sqf::is_server()) {  //We need to host a Server
@@ -742,7 +785,11 @@ void intercept::pre_start() {
     }, GameDataType::ANY, GameDataType::ANY);
 
     static auto _pvar = intercept::client::host::registerFunction("publicVariable"sv, ""sv, [](uintptr_t, game_value_parameter right) -> game_value {
-       
+        if (!pClient) {
+            sqf::public_variable(right);
+            return {};
+        }
+
         auto var = sqf::get_variable(sqf::current_namespace(), right);
         json base;
         
@@ -751,32 +798,82 @@ void intercept::pre_start() {
 
         (&var)->serialize(ar);
 
-        auto dmp = base.dump(1);
+        //auto dmp = base.dump(1);
 
 
         std::string varname = right;
-
-        if (dmp.find("Enables a bullet trace") != std::string::npos) {
-            __debugbreak();
-        }
+        sqf::system_chat(varname);
+        //if (dmp.find("Enables a bullet trace") != std::string::npos) {
+        //    __debugbreak();
+        //}
 
         //   OutputDebugString(varname.c_str());
         //   OutputDebugString(dmp.c_str());
 
-        auto cbor = json::to_cbor(base);
-        std::string cborStr((char*) cbor.data(), cbor.size());
+        //auto cbor = json::to_cbor(base);
+        //std::string cborStr((char*) cbor.data(), cbor.size());
+
+
+        nlohmann::json info;
+        info["name"] = varname;
+        info["value"] = base; 
+        info["cmd"] = 0;
 
 
         auto msg = std::make_shared<zmsg>();
-        msg->push_front(cborStr);
-        msg->push_front("PVAR");
-        if (pClient)
-            pClient->sendMessage(msg,"listener");
-
-
+        msg->push_front(info.dump(-1));
+        *logF << "send " << msg->peek_front().length() << " "<< varname << "\n";
+        logF->flush();
+        pClient->send(serviceType::pvar, msg, false);
 
         return {};
     }, GameDataType::NOTHING, GameDataType::STRING);
+
+    static auto _pvarC = intercept::client::host::registerFunction("publicVariableClient"sv, ""sv, [](uintptr_t, game_value_parameter left, game_value_parameter right) -> game_value {
+        sqf::public_variable_client(left, right);
+        if (!pClient) {
+            return {};
+        }
+        
+        auto var = sqf::get_variable(sqf::current_namespace(), right);
+        json base;
+
+        param_archive ar(rv_allocator<ClassEntryJson>::create_single(EntryType::clas, ""sv, &base));
+
+
+        (&var)->serialize(ar);
+
+        //auto dmp = base.dump(1);
+
+
+        std::string varname = right;
+        sqf::system_chat(varname);
+        //if (dmp.find("Enables a bullet trace") != std::string::npos) {
+        //    __debugbreak();
+        //}
+
+        //   OutputDebugString(varname.c_str());
+        //   OutputDebugString(dmp.c_str());
+
+        //auto cbor = json::to_cbor(base);
+        //std::string cborStr((char*) cbor.data(), cbor.size());
+
+
+        nlohmann::json info;
+        info["name"] = varname;
+        info["value"] = base;
+        info["clientID"] = (int)left;
+        info["cmd"] = 0;
+
+
+        auto msg = std::make_shared<zmsg>();
+        msg->push_front(info.dump(-1));
+        *logF << "sendc " << msg->peek_front().length() << " " << varname << "\n";
+        logF->flush();
+        pClient->send(serviceType::pvar, msg, false);
+
+        return {};
+    }, GameDataType::NOTHING, GameDataType::SCALAR, GameDataType::STRING);
 
 
 
@@ -785,19 +882,24 @@ void intercept::pre_start() {
 void  intercept::pre_init() {
     //if (!sqf::is_server()) {
     #ifndef __linux__
-        if (pClient) __debugbreak();
+        //if (pClient) __debugbreak();
     #endif
-        pClient = new intercept::network::client::client("tcp://127.0.0.1:5555", std::to_string(sqf::client_owner()));
-
+        pClient = new intercept::network::client::client("tcp://127.0.0.1:5555",  sqf::client_owner());
+        logF = std::make_unique<std::ofstream>("P:/" + std::to_string(sqf::client_owner()));
 
         pClient->asynchronousRequestHandler = [](std::shared_ptr<zmsg> msg) {
 
-
-
-
-
             std::cout << "message\n";
         };
+
+        pClient->serviceHandlers[serviceType::pvar] = [](std::shared_ptr<zmsg> msg) {
+            pvarMutex.lock();
+            pvarQueue.push_back(msg);
+            pvarMutex.unlock();
+            std::cout << "pvar\n";
+        };
+
+
 
         pClient->synchronousRequestHandler = [](std::shared_ptr<zmsg> msg) {
             std::cout << "request\n";
