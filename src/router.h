@@ -392,8 +392,9 @@ namespace intercept::network::server {
                     execAtReturn endTask([]() {__itt_task_end(domain); });
                     std::shared_ptr<zmsg> msg = std::make_shared<zmsg>(*m_socket);
 
-                    if (msg->parts() == 0 && msg->getRoutingFrame().index() == 0) {
-                        pollNext = false;
+                    //If we didn't get a message. Poll again
+                    if (msg->parts() == 0 && (msg->getRoutingFrame().index() == 0 || msg->getRoutingFrame().valueless_by_exception())) {
+                        pollNext = true;
                         continue;
                     }
 
@@ -544,5 +545,5 @@ namespace intercept::network::server {
 
     };
 
-    static router* GRouter;
+    extern router* GRouter;
 }

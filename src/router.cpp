@@ -2,6 +2,8 @@
 #include <json.hpp>
 using namespace intercept::network::server;
 
+router* intercept::network::server::GRouter{nullptr};
+
 router::router() {
     GRouter = this;
     m_context = new zmq::context_t(1);

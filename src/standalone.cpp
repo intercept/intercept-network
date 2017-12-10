@@ -144,7 +144,7 @@ int main(int argc, char *argv[]) {
     s_version_assert(4, 0);
     s_catch_signals();
     intercept::network::server::router rt;
-    rt.bind("tcp://0.0.0.0:5555");
+    rt.bind("tcp://*:5555");
     //std::thread ([&rt](){rt.route();}).detach();
     rt.route();
     printf("exiting\n");

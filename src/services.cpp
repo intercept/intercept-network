@@ -77,8 +77,16 @@ void publicVariableService::dispatch(std::shared_ptr<zmsg> msg) {
             rf.senderID = routingBase.senderID;
             rf.snIdent = routingBase.snIdent;
 
-            for (auto& cli : m_clients) {
-                GRouter->worker_send(cli, msg, rf);
+            if (messageJson.count("clientID")) {
+                int32_t targetID = messageJson["clientID"];
+                for (auto& cli : m_clients) {
+                    if (cli->ident.clientID == targetID)
+                        GRouter->worker_send(cli, msg, rf);
+                }
+            } else {
+                for (auto& cli : m_clients) {
+                    GRouter->worker_send(cli, msg, rf);
+                }
             }
 
             JIPQueue[varName] = message;
@@ -105,6 +113,8 @@ void publicVariableService::dispatch(std::shared_ptr<zmsg> msg) {
             auto& cli = std::find_if(m_clients.begin(), m_clients.end(),[senderID](const std::shared_ptr<client>& v){
                 return v->ident.clientID == senderID;
             });
+
+            if (cli == m_clients.end()) return;
 
             RF_serviceMsg rf(serviceType::pvar);
             rf.senderID = 0;

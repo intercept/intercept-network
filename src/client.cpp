@@ -22,7 +22,8 @@ client::client(std::string broker, uint32_t clientID, int verbose) {
 }
 
 void client::connect_to_broker() {
-    m_worker = std::make_shared<zmq::socket_t>(*m_context, ZMQ_DEALER);
+    if (!m_worker)
+        m_worker = std::make_shared<zmq::socket_t>(*m_context, ZMQ_DEALER);
 
     //No Lingering
     int linger = 0;
@@ -40,7 +41,7 @@ void client::connect_to_broker() {
 
     //  Register rpc service
 
-    sendReady({"rpc"});
+    sendReady({"rpc","publicVariableService"});
 
     //  If liveness hits zero, queue is considered disconnected
     m_liveness = HEARTBEAT_LIVENESS;

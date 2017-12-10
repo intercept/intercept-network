@@ -216,14 +216,15 @@ public:
         }
         void sendPartsKeep(zmq::socket_t& socket) {
             for (size_t part_nbr = 0; part_nbr < m_part_data.size(); part_nbr++) {
-                zmq::message_t message;
                 auto& data = m_part_data[part_nbr];
+                zmq::message_t message(data.size());
                 __itt_task_begin(zmsg_domain, __itt_null, __itt_null, handle_send_rebuild);
                 memcpy(message.data(), data.c_str(), data.size());
                 __itt_task_end(zmsg_domain);
+                bool sndMore = part_nbr < m_part_data.size() - 1;
                 try {
                     __itt_task_begin(zmsg_domain, __itt_null, __itt_null, handle_send_send);
-                    socket.send(message, part_nbr < m_part_data.size() - 1 ? ZMQ_SNDMORE : 0);
+                    socket.send(message, sndMore ? ZMQ_SNDMORE : 0);
                     __itt_task_end(zmsg_domain);
                 }
                 catch (zmq::error_t error) {
@@ -402,7 +403,7 @@ public:
     // zmsg_pop
     std::string pop_front() {
         if (m_part_data.size() == 0) {
-            return 0;
+            return "";
         }
         auto part = std::move(m_part_data.front());
         m_part_data.erase(m_part_data.begin());

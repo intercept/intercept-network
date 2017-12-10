@@ -736,11 +736,11 @@ void  intercept::on_frame() {
             //#TODO support for other namespaces
 
             sqf::set_variable(sqf::mission_namespace(), name, out);
+            sqf::public_variable_client(sqf::client_owner(), name);
         }
 
-
-
     }
+    pvarQueue.clear();
     pvarMutex.unlock();
 }
 
@@ -785,8 +785,8 @@ void intercept::pre_start() {
     }, GameDataType::ANY, GameDataType::ANY);
 
     static auto _pvar = intercept::client::host::registerFunction("publicVariable"sv, ""sv, [](uintptr_t, game_value_parameter right) -> game_value {
+        sqf::public_variable(right);
         if (!pClient) {
-            sqf::public_variable(right);
             return {};
         }
 
@@ -908,10 +908,15 @@ void  intercept::pre_init() {
         };
 
 
+        nlohmann::json info;
+        info["cmd"] = 3;
 
 
-
-
+        auto msg = std::make_shared<zmsg>();
+        msg->push_front(info.dump(-1));
+        *logF << "sendGetJIP " << msg->peek_front().length() << "\n";
+        logF->flush();
+        pClient->send(serviceType::pvar, msg, false);
 
     //}
 }
