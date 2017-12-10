@@ -290,8 +290,9 @@ namespace intercept::network::server {
              * <command>
              * data...
              */
-            std::cout << "srv\n";
+            std::cout << sender << "srv\n";
             if (!sender->initialized) {//Not initialized. Protocol violation
+                std::cout << sender << "no init disconnect\n";
                 __itt_task_end(domain);
                 disconnect_client(sender, true);
                 return;
@@ -311,6 +312,7 @@ namespace intercept::network::server {
                 && serviceName.find_first_of("srv.") == 0) {
                 service_internal(serviceName, msg);
             } else {
+                std::cout << sender << " srv disp " << serviceName << "\n";
                 if (srv)
                     srv->dispatch(msg);
                 else {
@@ -443,8 +445,9 @@ namespace intercept::network::server {
                             switch (static_cast<serverMessageType>(rf.messageType)) {
 
                                 case serverMessageType::ready: {
-                                    std::cout << "rdy\n";
+                                    std::cout << cli << "rdy\n";
                                     if (cli->initialized) {//Can't init twice. Protocol violation
+                                        std::cout << cli << "dblinit\n";
                                         disconnect_client(cli, true);
                                         break;
                                     }
@@ -461,7 +464,7 @@ namespace intercept::network::server {
                                     }
                                 }break;
                                 case serverMessageType::heartbeat: {
-                                    std::cerr << "pong\n";
+                                    //std::cerr << "pong\n";
                                     cli->m_expiry = std::chrono::system_clock::now() + HEARTBEAT_EXPIRY;
                                 }break;
                                 case serverMessageType::disconnect: {
@@ -508,7 +511,7 @@ namespace intercept::network::server {
                     check_timeouts();
                     for (auto& srv : m_servers)
                         for (auto& worker : srv.second->m_clients) {
-                            std::cerr << "ping\n";
+                            //std::cerr << "ping\n";
                             zmsg heartbeat;
                             RF_serverMessage rf(static_cast<uint32_t>(serverMessageType::heartbeat));
                             rf.senderID = -1;
@@ -523,7 +526,7 @@ namespace intercept::network::server {
                 if (std::chrono::system_clock::now() > start + 1s) {
                     auto part = std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::system_clock::now() - start).count();
                     __itt_frame_end_v3(domain, NULL);
-                    std::cerr << std::dec << messageCounter*part << " " << part << "\n";
+                    //std::cerr << std::dec << messageCounter*part << " " << part << "\n";
                     messageCounter = 0;
                     __itt_frame_begin_v3(domain, NULL);
                     start = std::chrono::system_clock::now();

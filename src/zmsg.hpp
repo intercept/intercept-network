@@ -1,6 +1,18 @@
 #ifndef __ZMSG_H_INCLUDED__
 #define __ZMSG_H_INCLUDED__
 
+class trafficLogger {
+public:
+    static void out(int bytes);
+    static void in(int bytes);
+};
+
+
+
+#define TRAFFICLOG_OUTGOING(x) if (trafficLog) trafficLog->out(x);
+#define TRAFFICLOG_INCOMING(x) if (trafficLog) trafficLog->in(x);
+extern trafficLogger* trafficLog;
+
 #include "zhelpers.hpp"
 
 #include <vector>
@@ -9,6 +21,7 @@
 #define INTEL_NO_ITTNOTIFY_API
 #include <ittnotify.h>
 #include <variant>
+
 
 static __itt_domain* zmsg_domain = __itt_domain_create("zmsg");
 static __itt_string_handle* handle_send = __itt_string_handle_create("send");

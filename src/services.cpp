@@ -85,7 +85,8 @@ void publicVariableService::dispatch(std::shared_ptr<zmsg> msg) {
                 }
             } else {
                 for (auto& cli : m_clients) {
-                    GRouter->worker_send(cli, msg, rf);
+                    if (cli->ident.clientID != routingBase.senderID) //no need to send back
+                        GRouter->worker_send(cli, msg, rf);
                 }
             }
 
@@ -100,7 +101,8 @@ void publicVariableService::dispatch(std::shared_ptr<zmsg> msg) {
             rf.snIdent = routingBase.snIdent;
 
             for (auto& cli : m_clients) {
-                GRouter->worker_send(cli, msg, rf);
+                if (cli->ident.clientID != routingBase.senderID)
+                    GRouter->worker_send(cli, msg, rf);
             }
 
             JIPQueue.erase(varName);
@@ -121,6 +123,10 @@ void publicVariableService::dispatch(std::shared_ptr<zmsg> msg) {
             rf.snIdent = routingBase.snIdent;
 
             zmsg outMessage;
+
+            if (!JIPQueue.empty()) {
+                std::cout << *cli << " sndJIP\n";
+            }
 
             for (auto& it : JIPQueue) {
                 outMessage.push_front(it.second);

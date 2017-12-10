@@ -11,6 +11,7 @@ class CfgPatches {
 class Intercept {
     class core {
         class intercept_network {
+			certificate = "core";
             pluginName = "intercept-network";
         };
     };

@@ -11,6 +11,7 @@
 #include <fstream>
 
 using namespace intercept::types;
+using namespace intercept;
 using json = nlohmann::json;
 
 
@@ -744,7 +745,6 @@ void  intercept::on_frame() {
     pvarMutex.unlock();
 }
 
-
 void intercept::pre_start() {
     //if (sqf::is_server()) {  //We need to host a Server
     //    if (!network::server::GRouter) network::server::GRouter = new intercept::network::server::router();
@@ -876,15 +876,15 @@ void intercept::pre_start() {
     }, GameDataType::NOTHING, GameDataType::SCALAR, GameDataType::STRING);
 
 
-
-}
-
-void  intercept::pre_init() {
-    //if (!sqf::is_server()) {
+    static auto _prePe = intercept::client::host::registerFunction("interceptNetworkPrePreInit"sv, ""sv, [](uintptr_t) -> game_value {
+       
+        //if (!sqf::is_server()) {
     #ifndef __linux__
         //if (pClient) __debugbreak();
     #endif
-        pClient = new intercept::network::client::client("tcp://127.0.0.1:5555",  sqf::client_owner());
+        if (!pClient) //delete pClient;
+
+            pClient = new intercept::network::client::client("tcp://home.dedmen.de:5555", sqf::client_owner());
         logF = std::make_unique<std::ofstream>("P:/" + std::to_string(sqf::client_owner()));
 
         pClient->asynchronousRequestHandler = [](std::shared_ptr<zmsg> msg) {
@@ -918,7 +918,65 @@ void  intercept::pre_init() {
         logF->flush();
         pClient->send(serviceType::pvar, msg, false);
 
-    //}
+        //}
+
+
+
+
+
+        return {};
+    }, GameDataType::NOTHING);
+
+
+
+}
+
+void swapFuncs(game_value orig, game_value newCode) {
+
+    auto c = static_cast<game_data_code*>(orig.data.get());
+
+    auto nc = static_cast<game_data_code*>(newCode.data.get());
+
+    auto _1 = c->code_string;
+    auto _2 = c->instructions;
+    auto _3 = c->_dummy1;
+    auto _4 = c->_dummy;
+    auto _5 = c->is_final;
+
+
+    c->code_string = nc->code_string;
+    c->instructions = nc->instructions;
+    c->_dummy1 = nc->_dummy1;
+    c->_dummy = nc->_dummy;
+    c->is_final = nc->is_final;
+
+    nc->code_string = _1;
+    nc->instructions = _2;
+    nc->_dummy1 = _3;
+    nc->_dummy = _4;
+    nc->is_final = _5;
+}
+
+void intercept::post_start() {
+    auto preInitList = sqf::get_variable(sqf::ui_namespace(), "BIS_functions_listPreInit");
+
+    auto code = static_cast<game_data_code*>(preInitList.data.get());
+
+    std::string newCode = std::string("interceptNetworkPrePreInit;") + (code->code_string.data());
+    
+    
+    auto newCompiled = sqf::compile(newCode);
+
+    swapFuncs(newCompiled, preInitList);
+
+
+    auto test = sqf::get_variable(sqf::ui_namespace(), "BIS_functions_listPreInit");
+
+    auto teste2 = static_cast<game_data_code*>(test.data.get());
+
+
+    return;
+
 }
 
 void intercept::post_init() {
