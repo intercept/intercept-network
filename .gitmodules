@@ -4,3 +4,6 @@
 [submodule "3rdParty/cppzmq"]
 	path = 3rdParty/cppzmq
 	url = https://github.com/zeromq/cppzmq.git
+[submodule "3rdParty/intercept"]
+	path = 3rdParty/intercept
+	url = https://github.com/intercept/intercept.git

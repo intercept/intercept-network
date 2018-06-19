@@ -6,12 +6,12 @@
 #include <chrono>
 #include <map>
 #include <mutex>
-#include <complex.h>
+#include <complex>
 #include <json.hpp>
+#include "defines.hpp"
 
 using namespace std::chrono_literals;
-#define HEARTBEAT_LIVENESS  3       //  3-5 is reasonable
-namespace intercept::network::client {
+namespace network::client {
     class client {
     public:
 
@@ -100,9 +100,12 @@ namespace intercept::network::client {
             rf.snIdent = serverIdent;
             msg->setRoutingFrame(rf);
 
+            //msg->dump();
+
             sendQueMtx.lock();
             sendqueue.emplace_back(std::move(msg));
             sendQueMtx.unlock();
+
             sendMsgInterrupt();
         }
 
@@ -144,7 +147,7 @@ namespace intercept::network::client {
              char dummy;
              zmq::socket_t doSignal(*m_context, ZMQ_PAIR);
              doSignal.connect(m_signalStopAddr);
-             doSignal.send(&dummy, sizeof(dummy));
+             doSignal.send(&dummy, sizeof(dummy), ZMQ_DONTWAIT);
          }
 
         std::pair<messageType, std::shared_ptr<zmsg>> recv() {
@@ -159,8 +162,10 @@ namespace intercept::network::client {
                 if (items[1].revents & ZMQ_POLLIN) {
                     sendQueMtx.lock();
                     char x;
-                    m_signalStopSock->recv(&x, 1);
-                    zmsg m(*m_signalStopSock);
+                    
+                    while (m_signalStopSock->getsockopt<int>(ZMQ_EVENTS) & ZMQ_POLLIN)
+                        m_signalStopSock->recv(&x, ZMQ_DONTWAIT);
+                    
                     for (auto& it : sendqueue)
                         it->send(*m_worker);
                     sendqueue.clear();
@@ -178,11 +183,14 @@ namespace intercept::network::client {
                     //  Don't try to handle errors, just assert noisily
                     auto rfV = msg->getRoutingFrame();
 
-                    assert(msg->parts() >= 1 || rfV.index() != 0);
+                    if (!(msg->parts() >= 1 || rfV.index() != 0)) {
+                        std::cerr << "received empty packet?\n";
+                        continue;
+                    }
 
                     switch (static_cast<routingFrameType>(rfV.index())) {
                         case routingFrameType::serverMessage: {
-                            RF_serverMessage& rf = std::get<RF_serverMessage>(rfV);
+                            auto& rf = std::get<RF_serverMessage>(rfV);
                             switch (static_cast<serverMessageType>(rf.type)) {
                                 case serverMessageType::heartbeat: {
                                     std::cerr << "pong\n";
@@ -196,7 +204,7 @@ namespace intercept::network::client {
                             }
                         }break;
                         case routingFrameType::directMessage: {
-                            RF_directMessage& rf = std::get<RF_directMessage>(rfV);
+                            auto& rf = std::get<RF_directMessage>(rfV);
                             if (static_cast<clientFlags>(rf.clientFlags) == clientFlags::request) {
                                 return { messageType::request, msg };     //  We have a request to process
                             } else if (static_cast<clientFlags>(rf.clientFlags) == clientFlags::reply) {
@@ -280,15 +288,7 @@ namespace intercept::network::client {
                                 info[2] = 2; //is reply
                                 nlohmann::json target;
 
-                                RF_base routingBase(routingFrameType::none);
-                                std::visit([&routingBase](auto&& arg) {
-                                    using T = std::decay_t<decltype(arg)>;
-                                    if constexpr (std::is_same_v<T, std::nullptr_t>) {
-                                        __debugbreak();
-                                        return;
-                                    } else
-                                        routingBase = arg;
-                                }, packet.second->getRoutingFrame());
+                                RF_base routingBase = packet.second->getRoutingBaseFrame();
 
                                 target["clientID"] = routingBase.senderID;
 
@@ -328,7 +328,7 @@ namespace intercept::network::client {
 
                                                break;
                     case messageType::service: {
-                        RF_serviceMsg& rf = std::get<RF_serviceMsg>(packet.second->getRoutingFrame());
+                        auto& rf = std::get<RF_serviceMsg>(packet.second->getRoutingFrame());
                         if (serviceHandlers.find(rf.messageType) != serviceHandlers.end())
                             serviceHandlers[rf.messageType](packet.second);
                     }break;
@@ -384,7 +384,7 @@ namespace intercept::network::client {
     private:
         std::string m_broker;
         int32_t m_clientID;
-        uint64_t serverIdent;
+        uint64_t serverIdent = 0x123;
         std::shared_ptr<zmq::context_t> m_context;
         std::shared_ptr<zmq::socket_t> m_worker;     //  Socket to broker
 

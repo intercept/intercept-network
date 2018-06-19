@@ -1,9 +1,9 @@
 #include "router.h"
 #include <json.hpp>
 #include <fstream>
-using namespace intercept::network::server;
+using namespace network::server;
 
-router* intercept::network::server::GRouter{nullptr};
+router* network::server::GRouter{nullptr};
 
 trafficLogger* trafficLog{};
 std::mutex trafficMutex;
@@ -16,10 +16,12 @@ uint32_t incomingTraffic;
 router::router() {
     GRouter = this;
     m_context = new zmq::context_t(1);
-    m_socket = new zmq::socket_t(*m_context, ZMQ_ROUTER);
-    //int hwm = 10000;
-    //m_socket->setsockopt(ZMQ_RCVHWM, &hwm, sizeof(hwm));
+    m_context->setctxopt(ZMQ_IO_THREADS, 8);
+    m_socket = std::make_shared<zmq::socket_t>(*m_context, ZMQ_ROUTER);
+    int hwm = 100000;
+    m_socket->setsockopt(ZMQ_RCVHWM, &hwm, sizeof(hwm));
     m_verbose = false;
+    m_localCluster = std::make_shared<LocalCluster>();
     trafficLog = new trafficLogger();
 
     std::thread([]() {
@@ -27,7 +29,7 @@ router::router() {
         while (true) {
             std::this_thread::sleep_for(1s);
             trafficMutex.lock();
-            tlog << incomingTraffic << "\t" << outgoingTraffic << "\n";
+            tlog << incomingTraffic << "B\t" << outgoingTraffic << "B\n";
             incomingTraffic = outgoingTraffic = 0;
             tlog.flush();
             trafficMutex.unlock();
@@ -38,7 +40,7 @@ router::router() {
 
 
 router::~router() {
-    m_servers.clear();
+    m_clusters.clear();
 }
 
 

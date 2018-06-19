@@ -1,17 +1,17 @@
-#include <stdio.h>
+#include <cstdio>
 #include <cstdint>
 #include <atomic>
 #include <json.hpp>
 //#include <gzip.hpp>
 
-#include "router.h"
+#include "host/router.h"
 #include <intercept.hpp>
-#include "client.h"
+#include <windows.h>
+#include "client/client.h"
 #include <any>
 #include <fstream>
 
 using namespace intercept::types;
-using namespace intercept;
 using json = nlohmann::json;
 
 
@@ -703,8 +703,8 @@ int intercept::api_version() {
 std::vector<std::shared_ptr<zmsg>> pvarQueue;
 std::mutex pvarMutex;
 
-intercept::network::client::client* pClient = nullptr;
-intercept::network::server::router* pRouter = nullptr;
+network::client::client* pClient = nullptr;
+network::server::router* pRouter = nullptr;
 std::unique_ptr<std::ofstream> logF;
 
 void  intercept::on_frame() {  
@@ -747,12 +747,12 @@ void  intercept::on_frame() {
 
 void intercept::pre_start() {
     //if (sqf::is_server()) {  //We need to host a Server
-    //    if (!network::server::GRouter) network::server::GRouter = new intercept::network::server::router();
+    //    if (!network::server::GRouter) network::server::GRouter = new network::server::router();
     //    network::server::GRouter->bind("tcp://0.0.0.0:5555");  //#TODO correct port
     //    std::thread([]() { network::server::GRouter->route(); }).detach();
     //}
 
-    static auto _atanh = intercept::client::host::registerFunction("seriaTest"sv, ""sv, [](uintptr_t, game_value_parameter right) -> game_value {
+    static auto _atanh = intercept::client::host::register_sqf_command("seriaTest"sv, ""sv, [](uintptr_t, game_value_parameter right) -> game_value {
         auto ncnst = const_cast<game_value&>(right);
         json base;
  
@@ -782,9 +782,9 @@ void intercept::pre_start() {
         
         
         return out;
-    }, GameDataType::ANY, GameDataType::ANY);
+    }, game_data_type::ANY, game_data_type::ANY);
 
-    static auto _pvar = intercept::client::host::registerFunction("publicVariable"sv, ""sv, [](uintptr_t, game_value_parameter right) -> game_value {
+    static auto _pvar = intercept::client::host::register_sqf_command("publicVariable"sv, ""sv, [](uintptr_t, game_value_parameter right) -> game_value {
         sqf::public_variable(right);
         if (!pClient) {
             return {};
@@ -827,9 +827,9 @@ void intercept::pre_start() {
         pClient->send(serviceType::pvar, msg, false);
 
         return {};
-    }, GameDataType::NOTHING, GameDataType::STRING);
+    }, game_data_type::NOTHING, game_data_type::STRING);
 
-    static auto _pvarC = intercept::client::host::registerFunction("publicVariableClient"sv, ""sv, [](uintptr_t, game_value_parameter left, game_value_parameter right) -> game_value {
+    static auto _pvarC = intercept::client::host::register_sqf_command("publicVariableClient"sv, ""sv, [](uintptr_t, game_value_parameter left, game_value_parameter right) -> game_value {
         sqf::public_variable_client(left, right);
         if (!pClient) {
             return {};
@@ -873,10 +873,10 @@ void intercept::pre_start() {
         pClient->send(serviceType::pvar, msg, false);
 
         return {};
-    }, GameDataType::NOTHING, GameDataType::SCALAR, GameDataType::STRING);
+    }, game_data_type::NOTHING, game_data_type::SCALAR, game_data_type::STRING);
 
 
-    static auto _prePe = intercept::client::host::registerFunction("interceptNetworkPrePreInit"sv, ""sv, [](uintptr_t) -> game_value {
+    static auto _prePe = intercept::client::host::register_sqf_command("interceptNetworkPrePreInit"sv, ""sv, [](uintptr_t) -> game_value {
        
         //if (!sqf::is_server()) {
     #ifndef __linux__
@@ -884,7 +884,7 @@ void intercept::pre_start() {
     #endif
         if (!pClient) //delete pClient;
 
-            pClient = new intercept::network::client::client("tcp://home.dedmen.de:5555", sqf::client_owner());
+            pClient = new network::client::client("tcp://home.dedmen.de:5555", sqf::client_owner());
         logF = std::make_unique<std::ofstream>("P:/" + std::to_string(sqf::client_owner()));
 
         pClient->asynchronousRequestHandler = [](std::shared_ptr<zmsg> msg) {
@@ -925,7 +925,7 @@ void intercept::pre_start() {
 
 
         return {};
-    }, GameDataType::NOTHING);
+    }, game_data_type::NOTHING);
 
 
 
@@ -939,21 +939,15 @@ void swapFuncs(game_value orig, game_value newCode) {
 
     auto _1 = c->code_string;
     auto _2 = c->instructions;
-    auto _3 = c->_dummy1;
-    auto _4 = c->_dummy;
     auto _5 = c->is_final;
 
 
     c->code_string = nc->code_string;
     c->instructions = nc->instructions;
-    c->_dummy1 = nc->_dummy1;
-    c->_dummy = nc->_dummy;
     c->is_final = nc->is_final;
 
     nc->code_string = _1;
     nc->instructions = _2;
-    nc->_dummy1 = _3;
-    nc->_dummy = _4;
     nc->is_final = _5;
 }
 

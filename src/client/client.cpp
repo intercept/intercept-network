@@ -1,5 +1,5 @@
 #include "client.h"
-using namespace intercept::network::client;
+using namespace network::client;
 client::client(std::string broker, uint32_t clientID, int verbose) {
     s_version_assert(4, 0);
 
@@ -17,7 +17,6 @@ client::client(std::string broker, uint32_t clientID, int verbose) {
     m_signalStopAddr = "inproc://%lx%x" +std::to_string( (unsigned long) this) + std::to_string(rand());
     m_signalStopSock = std::make_unique<zmq::socket_t>(*m_context, ZMQ_PAIR);
     m_signalStopSock->bind(m_signalStopAddr);
-
     workThread = std::thread([this]() { work(); });
 }
 
@@ -46,6 +45,11 @@ void client::connect_to_broker() {
     //  If liveness hits zero, queue is considered disconnected
     m_liveness = HEARTBEAT_LIVENESS;
     m_heartbeat_at = std::chrono::system_clock::now() + m_heartbeat;
+
+    int hwm = 100000;
+    m_worker->setsockopt(ZMQ_SNDHWM, &hwm, sizeof(hwm));
+
+
 }
 
 client::~client() {

@@ -1,9 +1,10 @@
 #include "services.hpp"
 #include <json.hpp>
 #include "router.h"
-using namespace intercept::network::server;
+#include "server.hpp"
+using namespace network::server;
 
-void service::dispatch(std::shared_ptr<zmsg> msg) {
+void Service::dispatch(std::shared_ptr<zmsg> msg) {
     __debugbreak();
     //if (msg) { //  Queue message if any
     //    m_requests.push_back(msg);
@@ -25,7 +26,7 @@ void service::dispatch(std::shared_ptr<zmsg> msg) {
     //}
 }
 
-bool rpc_broker::match_target(const std::shared_ptr<client>& cli, int32_t cs) {
+bool rpc_broker::match_target(const std::shared_ptr<Client>& cli, int32_t cs) {
     return cli->ident.clientID == cs;// cs == cli->m_identity; //#FIXME
 }
 
@@ -46,7 +47,7 @@ void rpc_broker::dispatch(std::shared_ptr<zmsg> msg) {
     //GRouter->check_timeouts();
     for (auto& cli : m_clients) {
         if (cli->ident.serverIdentity == routingBase.snIdent && match_target(cli, target)) {
-            GRouter->worker_send(cli, msg);
+            parent->worker_send(cli, msg);
         }
     }
 }
@@ -81,12 +82,12 @@ void publicVariableService::dispatch(std::shared_ptr<zmsg> msg) {
                 int32_t targetID = messageJson["clientID"];
                 for (auto& cli : m_clients) {
                     if (cli->ident.clientID == targetID)
-                        GRouter->worker_send(cli, msg, rf);
+                        parent->worker_send(cli, msg, rf);
                 }
             } else {
                 for (auto& cli : m_clients) {
                     if (cli->ident.clientID != routingBase.senderID) //no need to send back
-                        GRouter->worker_send(cli, msg, rf);
+                        parent->worker_send(cli, msg, rf);
                 }
             }
 
@@ -102,7 +103,7 @@ void publicVariableService::dispatch(std::shared_ptr<zmsg> msg) {
 
             for (auto& cli : m_clients) {
                 if (cli->ident.clientID != routingBase.senderID)
-                    GRouter->worker_send(cli, msg, rf);
+                    parent->worker_send(cli, msg, rf);
             }
 
             JIPQueue.erase(varName);
@@ -112,7 +113,7 @@ void publicVariableService::dispatch(std::shared_ptr<zmsg> msg) {
         }break;
         case publicVariableSrvCommand::getJIPQueue: {
             auto senderID = routingBase.senderID;
-            auto& cli = std::find_if(m_clients.begin(), m_clients.end(),[senderID](const std::shared_ptr<client>& v){
+            auto& cli = std::find_if(m_clients.begin(), m_clients.end(),[senderID](const std::shared_ptr<Client>& v){
                 return v->ident.clientID == senderID;
             });
 
@@ -130,7 +131,7 @@ void publicVariableService::dispatch(std::shared_ptr<zmsg> msg) {
 
             for (auto& it : JIPQueue) {
                 outMessage.push_front(it.second);
-                GRouter->worker_send(*cli, outMessage, rf);
+                parent->worker_send(*cli, outMessage, rf);
                 outMessage.clear();
             }
         }break;

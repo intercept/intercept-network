@@ -1,5 +1,6 @@
 #ifndef __ZMSG_H_INCLUDED__
 #define __ZMSG_H_INCLUDED__
+#include "defines.hpp"
 
 class trafficLogger {
 public:
@@ -18,7 +19,7 @@ extern trafficLogger* trafficLog;
 #include <vector>
 #include <string>
 #include <stdarg.h>
-#define INTEL_NO_ITTNOTIFY_API
+//#define INTEL_NO_ITTNOTIFY_API
 #include <ittnotify.h>
 #include <variant>
 
@@ -78,7 +79,72 @@ public:
 };
 
 #pragma pack(pop)
-using routingFrameVariant = std::variant<std::nullptr_t, RF_serverMessage, RF_directMessage, RF_serviceMsg>;
+class routingFrame {
+    public:
+    routingFrameType type = routingFrameType::none;
+    int index() const noexcept {
+        return (int)type;
+    }
+    bool isInvalid() const noexcept {
+        return type == routingFrameType::none;
+    }
+    union {
+        RF_base base;
+        RF_serverMessage server;
+        RF_directMessage direct;
+        RF_serviceMsg service;
+    };
+    routingFrame(RF_serverMessage msg) : type(routingFrameType::serverMessage), server(msg) {};
+    routingFrame(RF_directMessage msg) : type(routingFrameType::directMessage), direct(msg) {};
+    routingFrame(RF_serviceMsg msg) : type(routingFrameType::serviceMessage), service(msg) {};
+    routingFrame() {};
+
+    void rebuildInto(zmq::message_t& msg) const {
+        switch (type) {
+            case routingFrameType::none: DEBUG_BREAK; break;
+            case routingFrameType::serverMessage: msg.rebuild(&server, sizeof(RF_serverMessage)); break;
+            case routingFrameType::directMessage: msg.rebuild(&direct, sizeof(RF_directMessage)); break;
+            case routingFrameType::serviceMessage: msg.rebuild(&service, sizeof(RF_serviceMsg)); break;
+            default: ;
+        }
+    }
+
+};
+
+
+
+namespace std {
+    template<size_t I> _NODISCARD constexpr decltype(auto)  get(const routingFrame &c) {
+        if constexpr (I == (size_t)routingFrameType::none)
+            return nullptr;
+        if constexpr (I == (size_t)routingFrameType::serverMessage)
+            return c.server;
+        if constexpr (I == (size_t)routingFrameType::directMessage)
+            return c.direct;
+        if constexpr (I == (size_t)routingFrameType::serviceMessage)
+            return c.service;
+        _THROW(bad_variant_access{});
+    }
+
+    template<class T> _NODISCARD constexpr auto& get(const routingFrame &c) noexcept;
+    
+    template<>
+        _NODISCARD inline auto& get<RF_serverMessage>(const routingFrame &c) noexcept {
+        if (c.type != routingFrameType::serverMessage) DEBUG_BREAK;
+        return c.server;
+    }
+    template<>
+    _NODISCARD inline auto& get<RF_directMessage>(const routingFrame &c) noexcept {
+        if (c.type != routingFrameType::directMessage) DEBUG_BREAK;
+        return c.direct;
+    }
+    template<>
+    _NODISCARD inline auto& get<RF_serviceMsg>(const routingFrame &c) noexcept {
+        if (c.type != routingFrameType::serviceMessage) DEBUG_BREAK;
+        return c.service;
+    }
+
+}
 
 class zmsg {
 public:
@@ -139,6 +205,7 @@ public:
                 if (!socket.recv(&identity, ZMQ_DONTWAIT)) {//block if we know there is data in the pipe
                     return false;
                 }
+                TRAFFICLOG_INCOMING(identity.size());
             } catch (zmq::error_t error) {
                 std::cout << "E: " << error.what() << std::endl;
                 return false;
@@ -152,6 +219,7 @@ public:
             if (!socket.recv(&routingFrameMsg, ZMQ_DONTWAIT)) {//block if we know there is data in the pipe
                 return false;
             }
+            TRAFFICLOG_INCOMING(routingFrameMsg.size());
         } catch (zmq::error_t error) {
             std::cout << "E: " << error.what() << std::endl;
             return false;
@@ -186,6 +254,7 @@ public:
                 if (!socket.recv(&message, waitingForMore ? 0 : ZMQ_DONTWAIT)) {//block if we know there is data in the pipe
                     return false;
                 }
+                TRAFFICLOG_INCOMING(message.size());
             } catch (zmq::error_t error) {
                 std::cout << "E: " << error.what() << std::endl;
                 return false;
@@ -220,6 +289,7 @@ public:
                 __itt_task_end(zmsg_domain);
                 try {
                     __itt_task_begin(zmsg_domain, __itt_null, __itt_null, handle_send_send);
+                    TRAFFICLOG_OUTGOING(message.size());
                     socket.send(message, part_nbr < m_part_data.size() - 1 ? ZMQ_SNDMORE : 0);
                     __itt_task_end(zmsg_domain);
                 } catch (zmq::error_t error) {
@@ -237,6 +307,7 @@ public:
                 bool sndMore = part_nbr < m_part_data.size() - 1;
                 try {
                     __itt_task_begin(zmsg_domain, __itt_null, __itt_null, handle_send_send);
+                    TRAFFICLOG_OUTGOING(message.size());
                     socket.send(message, sndMore ? ZMQ_SNDMORE : 0);
                     __itt_task_end(zmsg_domain);
                 }
@@ -246,20 +317,18 @@ public:
             }
         }
 
-        void sendRoutingFrame(zmq::socket_t& socket, routingFrameVariant& RF) {
-            if (RF.index() == 0) __debugbreak();
+        void sendRoutingFrame(zmq::socket_t& socket, routingFrame& RF) {
+            if (RF.type == routingFrameType::none) DEBUG_BREAK;
 
             zmq::message_t routingFrameMsg;
-            std::visit([&routingFrameMsg](auto&& arg) {
-                using T = std::decay_t<decltype(arg)>;
-                routingFrameMsg.rebuild(&arg, sizeof(T));
-            }, RF);
-
+            RF.rebuildInto(routingFrameMsg);
+            TRAFFICLOG_OUTGOING(routingFrameMsg.size());
             socket.send(routingFrameMsg, m_part_data.empty() ? 0 : ZMQ_SNDMORE);
         }
         void sendClientIdentity(zmq::socket_t& socket, clientIdentity& ident) {
             zmq::message_t identMessage;
             identMessage.rebuild(&ident, sizeof(clientIdentity));
+            TRAFFICLOG_OUTGOING(identMessage.size());
             socket.send(identMessage, ZMQ_SNDMORE);
         }
     public:
@@ -291,7 +360,7 @@ public:
         __itt_task_end(zmsg_domain);
     }
 
-    void sendKeep(zmq::socket_t& socket, routingFrameVariant overrideRF) {
+    void sendKeep(zmq::socket_t& socket, routingFrame overrideRF) {
         __itt_task_begin(zmsg_domain, __itt_null, __itt_null, handle_send);
     #ifdef _DEBUG
         if (socket.getsockopt<int>(ZMQ_TYPE) == ZMQ_ROUTER) __debugbreak(); //Have to set targetID!
@@ -308,6 +377,7 @@ public:
     #ifdef _DEBUG
         if (socket.getsockopt<int>(ZMQ_TYPE) != ZMQ_ROUTER) __debugbreak(); //This is for routers
     #endif
+        //dump();
 
         sendClientIdentity(socket, targetIdent);
 
@@ -335,7 +405,7 @@ public:
         __itt_task_end(zmsg_domain);
     }
 
-    void sendKeep(zmq::socket_t& socket, clientIdentity targetIdent, routingFrameVariant overrideRF) {
+    void sendKeep(zmq::socket_t& socket, clientIdentity targetIdent, routingFrame overrideRF) {
         __itt_task_begin(zmsg_domain, __itt_null, __itt_null, handle_send);
     #ifdef _DEBUG
         if (socket.getsockopt<int>(ZMQ_TYPE) != ZMQ_ROUTER) __debugbreak(); //This is for routers
@@ -494,30 +564,22 @@ public:
         }
     }
 
-    void setRoutingFrame(routingFrameVariant rf) {
+    void setRoutingFrame(routingFrame rf) {
         routingFrame = rf;
     }
 
-    routingFrameVariant getRoutingFrame() const {
+    const routingFrame& getRoutingFrame() const {
         return routingFrame;
     }
 
-    RF_base getRoutingBaseFrame() const {
-        RF_base routingBase(routingFrameType::none);
-        std::visit([&routingBase](auto&& arg) {
-            using T = std::decay_t<decltype(arg)>;
-            if constexpr (std::is_same_v<T, std::nullptr_t>) {
-                __debugbreak();
-                return;
-            } else
-                routingBase = arg;
-        }, routingFrame);
-        return routingBase;
+    const RF_base& getRoutingBaseFrame() const {
+        if (routingFrame.type == routingFrameType::none) DEBUG_BREAK;
+        return routingFrame.base;
     }
 
 private:
     std::vector<std::string> m_part_data;
-    routingFrameVariant routingFrame{ nullptr };
+    routingFrame routingFrame;
 };
 
 #endif /* ZMSG_H_ */
