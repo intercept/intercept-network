@@ -64,7 +64,7 @@ int clientListener(uint32_t clientID = 5) {
     session.synchronousRequestHandler = [](std::shared_ptr<zmsg> msg) {
         std::cout << "request\n";
         msg->clear();
-        msg->push_front("Hello answer!");
+        msg->push_front("Hello answer!"sv);
     };
 
     session.serviceHandlers[serviceType::pvar] = [](std::shared_ptr<zmsg> msg) {

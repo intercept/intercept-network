@@ -904,7 +904,7 @@ void intercept::pre_start() {
         pClient->synchronousRequestHandler = [](std::shared_ptr<zmsg> msg) {
             std::cout << "request\n";
             msg->clear();
-            msg->push_front("Hello answer!");
+            msg->push_front("Hello answer!"sv);
         };
 
 

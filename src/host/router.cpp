@@ -20,6 +20,11 @@ router::router() {
     m_socket = std::make_shared<zmq::socket_t>(*m_context, ZMQ_ROUTER);
     int hwm = 100000;
     m_socket->setsockopt(ZMQ_RCVHWM, &hwm, sizeof(hwm));
+
+    //FastPath
+    //bool fastpath = true;
+    //m_socket->setsockopt(ZMQ_LOOPBACK_FASTPATH, &fastpath, sizeof(fastpath));
+
     m_verbose = false;
     m_localCluster = std::make_shared<LocalCluster>();
     trafficLog = new trafficLogger();

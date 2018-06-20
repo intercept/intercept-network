@@ -33,6 +33,13 @@ void client::connect_to_broker() {
     };
 
     m_worker->setsockopt(ZMQ_IDENTITY, &id, sizeof(clientIdentity));
+
+
+    //FastPath
+    //bool fastpath = true;
+    //m_worker->setsockopt(ZMQ_LOOPBACK_FASTPATH, &fastpath, sizeof(fastpath));
+
+
     //s_set_id(*m_worker, 123);
     m_worker->connect(m_broker.c_str());
     if (m_verbose)

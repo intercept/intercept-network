@@ -43,6 +43,7 @@ void rpc_broker::dispatch(std::shared_ptr<zmsg> msg) {
     int32_t target = targetInfo[0]["clientID"];
 
     std::cout << "rpc from " << routingBase.snIdent << "|" << routingBase.senderID << " to " << target << "\n";
+    //#TODO peek_front doesn't take it off. With this we have the sender twice??
     msg->push_front(sender); //need to know where it came from
     //GRouter->check_timeouts();
     for (auto& cli : m_clients) {

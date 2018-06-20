@@ -1,5 +1,6 @@
 #include "server.hpp"
 #include "router.h"
+using namespace std::literals;
 
 static __itt_string_handle* handle_processMessage = __itt_string_handle_create("processMessage");
 
@@ -200,9 +201,16 @@ void LocalServer::service_internal(const std::string& service_name, std::shared_
 
     //  Remove & save client return envelope and insert the
     //  protocol header and service name, then rewrap envelope.
-    std::string client = msg->unwrap();
-    msg->wrap(MDPW_REPLY, service_name);
-    msg->wrap(client.c_str(), "");
+    //std::string client = msg->unwrap();//#TODO we unwrap(pop) it just to wrap(push) the same thing back again?
+    //msg->wrap(MDPW_REPLY, service_name);
+    //msg->wrap(client, "");
+
+    msg->push_back(""sv);
+    //#TODO MDPW_REPLY macro with sv
+    msg->push_back("\003"sv);//MDPW_REPLY
+    msg->push_back(service_name);
+
+
     //std::cerr << "serviceend\n";
     //msg->dump();
     /*

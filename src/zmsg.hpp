@@ -1,6 +1,7 @@
 #ifndef __ZMSG_H_INCLUDED__
 #define __ZMSG_H_INCLUDED__
 #include "defines.hpp"
+#include <optional>
 
 class trafficLogger {
 public:
@@ -18,8 +19,8 @@ extern trafficLogger* trafficLog;
 
 #include <vector>
 #include <string>
-#include <stdarg.h>
-//#define INTEL_NO_ITTNOTIFY_API
+#include <cstdarg>
+#define INTEL_NO_ITTNOTIFY_API
 #include <ittnotify.h>
 #include <variant>
 
@@ -172,8 +173,9 @@ public:
     //  --------------------------------------------------------------------------
     //  Copy Constructor, equivalent to zmsg_dup
     zmsg(zmsg &msg) {
-        m_part_data.resize(msg.m_part_data.size());
-        std::copy(msg.m_part_data.begin(), msg.m_part_data.end(), m_part_data.begin());
+        m_part_data = msg.m_part_data;
+        //m_part_data.resize(msg.m_part_data.size());
+        //std::copy(msg.m_part_data.begin(), msg.m_part_data.end(), m_part_data.begin());
         routingFrame = msg.routingFrame;
     }
 
@@ -187,11 +189,11 @@ public:
         m_part_data.clear();
     }
 
-    void set_part(size_t part_nbr, char *data) {
-        if (part_nbr < m_part_data.size()) {
-            m_part_data[part_nbr] = data;
-        }
-    }
+    //void set_part(size_t part_nbr, char *data) {
+    //    if (part_nbr < m_part_data.size()) {
+    //        m_part_data[part_nbr] = data;
+    //    }
+    //}
 
     bool recv(zmq::socket_t& socket) {
         clear();                         //#TODO get clientID?
@@ -224,7 +226,6 @@ public:
             std::cout << "E: " << error.what() << std::endl;
             return false;
         }
-
         auto rfbase = static_cast<RF_base*>(routingFrameMsg.data());
         if (isRouter && (rfbase->senderID != senderID.clientID || rfbase->snIdent != senderID.serverIdentity)) {
             __debugbreak(); //SenderID fake
@@ -261,9 +262,10 @@ public:
             }
             //std::cerr << "recv: \"" << (unsigned char*) message.data() << "\", size " << message.size() << std::endl;
 
-            m_part_data.push_back(std::string((char*) message.data(), message.size()));
-
             waitingForMore = message.more();
+
+            m_part_data.emplace_back(std::move(message));
+
             if (!waitingForMore) {
                 break;
             }
@@ -278,6 +280,21 @@ public:
                 zmq::message_t message;
                 auto& data = m_part_data[part_nbr];
 
+                if (data.hasMessage()) {
+
+                    try {
+                        __itt_task_begin(zmsg_domain, __itt_null, __itt_null, handle_send_send);
+                        TRAFFICLOG_OUTGOING(data.size());
+                        socket.send(data.getMessage(), part_nbr < m_part_data.size() - 1 ? ZMQ_SNDMORE : 0);
+                        __itt_task_end(zmsg_domain);
+                    }
+                    catch (zmq::error_t error) {
+                        assert(error.num() != 0);
+                    }
+                    continue;
+                }
+
+
                 __itt_task_begin(zmsg_domain, __itt_null, __itt_null, handle_send_rebuild);
                 auto datHeap = new std::string(std::move(data));
                 //zero-copy move
@@ -287,9 +304,13 @@ public:
                     //__itt_task_end(zmsg_domain);
                 }, (void*) datHeap);
                 __itt_task_end(zmsg_domain);
+
+
+
+
                 try {
                     __itt_task_begin(zmsg_domain, __itt_null, __itt_null, handle_send_send);
-                    TRAFFICLOG_OUTGOING(message.size());
+                    TRAFFICLOG_OUTGOING(data.size());
                     socket.send(message, part_nbr < m_part_data.size() - 1 ? ZMQ_SNDMORE : 0);
                     __itt_task_end(zmsg_domain);
                 } catch (zmq::error_t error) {
@@ -300,15 +321,19 @@ public:
         void sendPartsKeep(zmq::socket_t& socket) {
             for (size_t part_nbr = 0; part_nbr < m_part_data.size(); part_nbr++) {
                 auto& data = m_part_data[part_nbr];
-                zmq::message_t message(data.size());
-                __itt_task_begin(zmsg_domain, __itt_null, __itt_null, handle_send_rebuild);
-                memcpy(message.data(), data.c_str(), data.size());
-                __itt_task_end(zmsg_domain);
+
+
+
+
+                //zmq::message_t message(data.size());
+                //__itt_task_begin(zmsg_domain, __itt_null, __itt_null, handle_send_rebuild);
+                //memcpy(message.data(), data.c_str(), data.size());
+                //__itt_task_end(zmsg_domain);
                 bool sndMore = part_nbr < m_part_data.size() - 1;
                 try {
                     __itt_task_begin(zmsg_domain, __itt_null, __itt_null, handle_send_send);
-                    TRAFFICLOG_OUTGOING(message.size());
-                    socket.send(message, sndMore ? ZMQ_SNDMORE : 0);
+                    TRAFFICLOG_OUTGOING(data.size());
+                    socket.send(data.getMessage(), sndMore ? ZMQ_SNDMORE : 0);//message
                     __itt_task_end(zmsg_domain);
                 }
                 catch (zmq::error_t error) {
@@ -420,18 +445,15 @@ public:
         __itt_task_end(zmsg_domain);
     }
 
-
-
-
     size_t parts() {
         return m_part_data.size();
     }
 
-    void body_set(const char *body) {
-        if (m_part_data.size() > 0) {
+    void body_set(std::string_view body) {
+        if (!m_part_data.empty()) {
             m_part_data.erase(m_part_data.end() - 1);
         }
-        push_back((char*) body);
+        push_back(body);
     }
 
     void
@@ -443,28 +465,32 @@ public:
         vsnprintf(value, 255, format, args);
         va_end(args);
 
-        body_set(value);
+        body_set(std::string_view(value, strlen(value)));
     }
 
     char * body() {
         if (m_part_data.size())
-            return ((char *) m_part_data[m_part_data.size() - 1].c_str());
+            return const_cast<char *>(m_part_data[m_part_data.size() - 1].c_str());
         else
             return 0;
     }
 
     // zmsg_push
-    void push_front(char *part) {
-        m_part_data.insert(m_part_data.begin(), part);
-    }
+    //void push_front(char *part) {
+    //    m_part_data.insert(m_part_data.begin(), part);
+    //}
 
     // zmsg_append
-    void push_back(char *part) {
+    void push_back(std::string_view part) {
         m_part_data.push_back(part);
     }
 
     // zmsg_push
     void push_front(const std::string& part) {
+        m_part_data.insert(m_part_data.begin(), part);
+    }
+
+    void push_front(std::string_view part) {
         m_part_data.insert(m_part_data.begin(), part);
     }
 
@@ -485,7 +511,7 @@ public:
 
     // zmsg_pop
     std::string pop_front() {
-        if (m_part_data.size() == 0) {
+        if (m_part_data.empty()) {
             return "";
         }
         auto part = std::move(m_part_data.front());
@@ -493,15 +519,15 @@ public:
         return part;
     }
 
-    std::string& peek_front() {
+    std::string_view peek_front() {
         return m_part_data.front();
     }
 
 
-    void append(const char *part) {
-        assert(part);
-        push_back((char*) part);
-    }
+    //void append(const char *part) {
+    //    assert(part);
+    //    push_back((char*) part);
+    //}
 
     char *address() {
         if (m_part_data.size() > 0) {
@@ -511,22 +537,22 @@ public:
         }
     }
 
-    void wrap(const char *address, const char *delim) {
-        if (delim) {
-            push_front((char*) delim);
-        }
-        push_front((char*) address);
-    }
+    //void wrap(const char *address, const char *delim) {
+    //    if (delim) {
+    //        push_front((char*) delim);
+    //    }
+    //    push_front((char*) address);
+    //}
     void wrap(std::string address, std::string delim = {}) {
         push_front(std::move(delim));
         push_front(std::move(address));
     }
 
-    void wrap(const char* address, std::string&& delim) {
+    void wrap(std::string_view address, std::string&& delim) {
         push_front(std::move(delim));
         push_front(address);
     }
-    void wrap(std::string&& address, const char* delim) {
+    void wrap(std::string&& address, std::string_view delim) {
         push_front(delim);
         push_front(std::move(address));
     }
@@ -577,8 +603,101 @@ public:
         return routingFrame.base;
     }
 
+    class zmq_part {
+    public:
+        zmq_part(zmq::message_t&& m) : msg(std::move(m)) {}
+        zmq_part(std::string&& m) : str(std::move(m)) {}
+        zmq_part(const std::string& m) : str(m) {}
+        zmq_part(std::string_view m) : str(m){}
+
+        zmq_part(const zmq_part& ot) : str(static_cast<std::string_view>(ot)) {
+            if (ot.msg)
+                DEBUG_BREAK;
+        }
+        zmq_part(zmq_part&& ot) noexcept : msg(std::move(ot.msg)), str(std::move(ot.str)) {
+            ot.msg = std::nullopt;
+            ot.str = std::nullopt;
+        }
+
+        zmq_part& operator=(const zmq_part& ot) {
+            str = static_cast<std::string_view>(ot);
+            return *this;
+        }
+
+        zmq_part& operator=(zmq_part&& ot) noexcept {
+            str = std::move(ot.str);
+            msg = std::move(ot.msg);
+            return *this;
+        }
+
+        const char* c_str() const noexcept{
+            if (str)
+                return str->c_str();
+            if (msg)
+                return static_cast<const char*>(msg->data());
+            DEBUG_BREAK;
+        }
+        size_t size() const noexcept {
+            if (str)
+                return str->length();
+            if (msg)
+                return msg->size();
+            DEBUG_BREAK;
+        }
+        char operator[](size_t offs) const noexcept {
+            if (str)
+                return (*str)[offs];
+            if (msg)
+                return static_cast<const char*>(msg->data())[offs];
+            DEBUG_BREAK;
+        }
+
+        operator std::string_view() const noexcept {
+            if (str)
+                return (*str);
+            if (msg)
+                return std::string_view(static_cast<const char*>(msg->data()), msg->size());
+            DEBUG_BREAK;
+        }
+
+        operator std::string() noexcept {
+            if (str)
+                return *str;
+            if (msg) {
+                str = std::string(static_cast<const char*>(msg->data()), msg->size());
+                return *str;
+            }
+            DEBUG_BREAK;
+        }
+
+        bool hasMessage() const noexcept {
+            return msg.has_value();
+        }
+
+        zmq::message_t getMessage() {
+            if (msg) {
+                auto msgO = std::move(*msg);
+                msg = std::nullopt;
+                return msgO;
+            }
+            zmq::message_t out(str->length());
+            memcpy(out.data(), str->c_str(), str->size());
+            return out;
+        }
+
+
+        std::optional<zmq::message_t> msg;
+        std::optional<std::string> str;
+    };
+
+
+
 private:
-    std::vector<std::string> m_part_data;
+    
+
+
+
+    std::vector<zmq_part> m_part_data;
     routingFrame routingFrame;
 };
 
