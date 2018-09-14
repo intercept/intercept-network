@@ -784,6 +784,20 @@ void intercept::pre_start() {
         return out;
     }, game_data_type::ANY, game_data_type::ANY);
 
+	static auto _serializeToJson = intercept::client::host::register_sqf_command("serializeToJson"sv, ""sv, [](uintptr_t, game_value_parameter right) -> game_value {
+		auto ncnst = const_cast<game_value&>(right);
+		json base;
+
+		param_archive ar(rv_allocator<ClassEntryJson>::create_single(EntryType::clas, ""sv, &base));
+
+
+		(&ncnst)->serialize(ar);
+
+		auto dmp = base.dump(-1);
+	
+		return dmp;
+	}, game_data_type::STRING, game_data_type::ANY);
+
     static auto _pvar = intercept::client::host::register_sqf_command("publicVariable"sv, ""sv, [](uintptr_t, game_value_parameter right) -> game_value {
         sqf::public_variable(right);
         if (!pClient) {
